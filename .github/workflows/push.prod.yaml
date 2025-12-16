@@ -1,0 +1,90 @@
+name: Push Hotfix from tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      prod_tag:
+        description: 'Production tag (e.g. 2024.4.129)'
+        required: true
+        type: string
+      hotfix_branch:
+        description: 'Hotfix branch name (e.g. hotfix/fix-inventory-sync)'
+        required: true
+        type: string
+      hotfix_commit:
+        description: 'Commit SHA or multiple Commit SHA to cherry-pick (must be from master)'
+        required: true
+        type: string
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+
+          echo "▶ Prod tag      : ${{ inputs.prod_tag }}"
+          echo "▶ Hotfix branch : ${{ inputs.hotfix_branch }}"
+          echo "▶ Hotfix commit : ${{ inputs.hotfix_commit }}"
+
+          git fetch --tags origin
+          git fetch origin master
+
+          # Validate prod tag
+          if ! git rev-parse "tags/v${{ inputs.prod_tag }}" >/dev/null 2>&1; then
+            echo "❌ Tag '${{ inputs.prod_tag }}' does not exist"
+            exit 1
+          fi
+
+          # Validate commit exists
+          if ! git cat-file -e "${{ inputs.hotfix_commit }}^{commit}" 2>/dev/null; then
+            echo "❌ Commit '${{ inputs.hotfix_commit }}' does not exist"
+            exit 1
+          fi
+
+          # Ensure commit is from master
+          if ! git merge-base --is-ancestor "${{ inputs.hotfix_commit }}" origin/master; then
+            echo "❌ Commit is not reachable from master"
+            exit 1
+          fi
+
+          # Ensure branch does not exist
+          if git show-ref --verify --quiet "refs/heads/${{ inputs.hotfix_branch }}"; then
+            echo "❌ Branch '${{ inputs.hotfix_branch }}' already exists"
+            exit 1
+          fi
+
+      - name: Config github user
+        run: |
+          git config user.name ""
+          git config user.email 
+
+      - name: Create hotfix branch from prod tag
+        run: |
+          set -euo pipefail
+          git checkout "tags/v${{ inputs.prod_tag }}" -b "${{ inputs.hotfix_branch }}"
+
+      - name: Cherry-pick hotfix commit
+        run: |
+          set -euo pipefail
+          if ! git cherry-pick "${{ inputs.hotfix_commit }}"; then
+            echo "❌ Cherry-pick failed (likely conflicts). Resolve manually and rerun."
+            exit 1
+          fi
+
+      - name: Push hotfix branch
+        run: |
+          set -euo pipefail
+          git push --set-upstream origin "${{ inputs.hotfix_branch }}"
+
+      - name: Summary
+        run: |
+          echo "✅ Hotfix branch created and pushed"
+          echo "➡️ Next: run 'Build and Promote' for this branch"
